@@ -20,7 +20,7 @@ Tracked today:
 - working `get_clipboard_text()` and `set_clipboard_text()` entry points
 - macOS `pbcopy` / `pbpaste` backend
 - Linux `wl-copy` / `wl-paste`, `xclip`, and `xsel` command backends
-- backend-aware roundtrip coverage in `fpm test`
+- backend-aware roundtrip and edge coverage in `fpm test`
 
 Current public types:
 
@@ -38,8 +38,10 @@ Current semantics:
 
 - the package builds and tests cleanly on macOS and Ubuntu
 - `clipboard_backend_name()` auto-detects `pbcopy`, `wl-clipboard`, `xclip`, `xsel`, or `unavailable`
+- get and set flows try the preferred detected backend first, then fall through to later viable backends when launch-time probing was stale
 - `get_clipboard_text()` and `set_clipboard_text()` return the detected backend in `clipboard_result%backend`
 - when no supported backend is available, both operations report `unavailable`
+- empty clipboard writes are treated as normal successful text operations when a backend exists
 - text flows are command-backed today and focused on clipboard text, not arbitrary binary payloads
 
 ## Build And Test
