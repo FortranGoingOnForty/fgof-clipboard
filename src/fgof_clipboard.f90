@@ -1,5 +1,5 @@
 module fgof_clipboard
-  use fgof_process, only : run, shell
+  use fgof_process, only : command, run, shell
   use fgof_clipboard_types, only : &
     FGOF_CLIPBOARD_ERR_INTERNAL, &
     FGOF_CLIPBOARD_ERR_INVALID_OPTIONS, &
@@ -7,7 +7,7 @@ module fgof_clipboard
     FGOF_CLIPBOARD_ERR_UNAVAILABLE, &
     FGOF_CLIPBOARD_OK, &
     clipboard_result
-  use fgof_process_types, only : FGOF_PROCESS_OK, process_options, process_result
+  use fgof_process_types, only : FGOF_PROCESS_OK, process_command, process_options, process_result
   implicit none
   private
 
@@ -44,10 +44,10 @@ contains
 
   function get_clipboard_text() result(result_value)
     type(clipboard_result) :: result_value
+    type(process_command) :: cmd
     type(process_options) :: options
     type(process_result) :: process_outcome
     character(len=len(BACKEND_WL_CLIPBOARD)), allocatable :: backends(:)
-    character(len=:), allocatable :: command_line
     integer :: i
 
     result_value = clear_clipboard_result()
@@ -60,12 +60,17 @@ contains
       return
     end if
 
-    options%capture_stdout = .true.
-    options%capture_stderr = .true.
     do i = 1, size(backends)
       result_value%backend = trim(backends(i))
-      command_line = paste_command_for_backend(result_value%backend)
-      process_outcome = run(shell(command_line), options)
+      if (handle_test_clipboard_get(result_value%backend, result_value)) then
+        if (result_value%success) return
+        cycle
+      end if
+      options = process_options()
+      options%capture_stdout = .true.
+      options%capture_stderr = .true.
+      call configure_paste_backend(result_value%backend, cmd, options)
+      process_outcome = run(cmd, options)
       if (process_completed_successfully(process_outcome)) then
         result_value%success = .true.
         result_value%error_code = FGOF_CLIPBOARD_OK
@@ -81,10 +86,10 @@ contains
   function set_clipboard_text(text) result(result_value)
     character(len=*), intent(in) :: text
     type(clipboard_result) :: result_value
+    type(process_command) :: cmd
     type(process_options) :: options
     type(process_result) :: process_outcome
     character(len=len(BACKEND_WL_CLIPBOARD)), allocatable :: backends(:)
-    character(len=:), allocatable :: command_line
     integer :: i
 
     result_value = clear_clipboard_result()
@@ -98,12 +103,17 @@ contains
       return
     end if
 
-    options%stdin = text
-    options%capture_stderr = .true.
     do i = 1, size(backends)
       result_value%backend = trim(backends(i))
-      command_line = copy_command_for_backend(result_value%backend)
-      process_outcome = run(shell(command_line), options)
+      if (handle_test_clipboard_set(result_value%backend, text, result_value)) then
+        if (result_value%success) return
+        cycle
+      end if
+      options = process_options()
+      options%stdin = text
+      options%capture_stderr = .true.
+      call configure_copy_backend(result_value%backend, cmd, options, text)
+      process_outcome = run(cmd, options)
       if (process_completed_successfully(process_outcome)) then
         result_value%success = .true.
         result_value%error_code = FGOF_CLIPBOARD_OK
@@ -157,10 +167,17 @@ contains
     character(len=len(BACKEND_WL_CLIPBOARD)), allocatable :: backends(:)
     character(len=:), allocatable :: display
     character(len=:), allocatable :: test_backend
+    character(len=:), allocatable :: test_backends
     character(len=:), allocatable :: wayland_display
     character(len=:), allocatable :: xdg_session_type
 
     allocate(backends(0))
+
+    test_backends = getenv_text("FGOF_CLIPBOARD_TEST_BACKENDS")
+    if (allocated(test_backends)) then
+      call append_test_backends(backends, test_backends)
+      if (size(backends) > 0) return
+    end if
 
     test_backend = getenv_text("FGOF_CLIPBOARD_TEST_BACKEND")
     if (valid_backend_name(test_backend)) then
@@ -198,6 +215,30 @@ contains
             name == BACKEND_XCLIP .or. &
             name == BACKEND_XSEL
   end function valid_backend_name
+
+  subroutine append_test_backends(backends, backend_names)
+    character(len=len(BACKEND_WL_CLIPBOARD)), allocatable, intent(inout) :: backends(:)
+    character(len=*), intent(in) :: backend_names
+    character(len=:), allocatable :: entry
+    integer :: cursor
+    integer :: next_comma
+
+    cursor = 1
+    do while (cursor <= len(backend_names))
+      next_comma = index(backend_names(cursor:), ",")
+      if (next_comma == 0) then
+        entry = trim(adjustl(backend_names(cursor:)))
+        cursor = len(backend_names) + 1
+      else
+        entry = trim(adjustl(backend_names(cursor:cursor + next_comma - 2)))
+        cursor = cursor + next_comma
+      end if
+
+      if (len(entry) == 0) cycle
+      if (.not. valid_backend_name(entry)) cycle
+      call append_backend(backends, entry)
+    end do
+  end subroutine append_test_backends
 
   subroutine append_backend(backends, backend)
     character(len=len(BACKEND_WL_CLIPBOARD)), allocatable, intent(inout) :: backends(:)
@@ -244,68 +285,87 @@ contains
     found = process_completed_successfully(process_outcome)
   end function command_available
 
-  function copy_command_for_backend(backend) result(command_line)
+  subroutine configure_copy_backend(backend, cmd, options, text_value)
     character(len=*), intent(in) :: backend
-    character(len=:), allocatable :: command_line
-    character(len=:), allocatable :: override_command
-
-    override_command = test_command_override(backend, "FGOF_CLIPBOARD_TEST_COPY_CMD")
-    if (allocated(override_command)) then
-      command_line = override_command
-      return
-    end if
+    type(process_command), intent(out) :: cmd
+    type(process_options), intent(inout) :: options
+    character(len=*), intent(in) :: text_value
 
     select case (backend)
     case (BACKEND_PBCOPY)
-      command_line = "pbcopy"
+      cmd = command("pbcopy")
     case (BACKEND_WL_CLIPBOARD)
-      command_line = "wl-copy"
+      cmd = command("wl-copy")
     case (BACKEND_XCLIP)
-      command_line = "xclip -selection clipboard"
+      cmd = command("xclip", [character(len=10) :: "-selection", "clipboard"])
     case (BACKEND_XSEL)
-      command_line = "xsel --clipboard --input"
+      cmd = command("xsel", [character(len=11) :: "--clipboard", "--input"])
     case default
-      command_line = ""
+      cmd = command("")
     end select
-  end function copy_command_for_backend
+  end subroutine configure_copy_backend
 
-  function paste_command_for_backend(backend) result(command_line)
+  subroutine configure_paste_backend(backend, cmd, options)
     character(len=*), intent(in) :: backend
-    character(len=:), allocatable :: command_line
-    character(len=:), allocatable :: override_command
-
-    override_command = test_command_override(backend, "FGOF_CLIPBOARD_TEST_PASTE_CMD")
-    if (allocated(override_command)) then
-      command_line = override_command
-      return
-    end if
+    type(process_command), intent(out) :: cmd
+    type(process_options), intent(inout) :: options
 
     select case (backend)
     case (BACKEND_PBCOPY)
-      command_line = "pbpaste -Prefer txt"
+      cmd = command("pbpaste", [character(len=7) :: "-Prefer", "txt"])
     case (BACKEND_WL_CLIPBOARD)
-      command_line = "wl-paste --no-newline"
+      cmd = command("wl-paste", [character(len=12) :: "--no-newline"])
     case (BACKEND_XCLIP)
-      command_line = "xclip -selection clipboard -o"
+      cmd = command("xclip", [character(len=10) :: "-selection", "clipboard", "-o"])
     case (BACKEND_XSEL)
-      command_line = "xsel --clipboard --output"
+      cmd = command("xsel", [character(len=11) :: "--clipboard", "--output"])
     case default
-      command_line = ""
+      cmd = command("")
     end select
-  end function paste_command_for_backend
+  end subroutine configure_paste_backend
 
-  function test_command_override(backend, variable_name) result(command_line)
+  function test_env_value(backend, variable_name) result(value)
     character(len=*), intent(in) :: backend
     character(len=*), intent(in) :: variable_name
-    character(len=:), allocatable :: command_line
-    character(len=:), allocatable :: test_backend
+    character(len=:), allocatable :: value
+    character(len=:), allocatable :: backend_specific_name
 
-    test_backend = getenv_text("FGOF_CLIPBOARD_TEST_BACKEND")
-    if (.not. allocated(test_backend)) return
-    if (backend /= test_backend) return
+    backend_specific_name = backend_override_variable_name(backend, variable_name)
+    if (allocated(backend_specific_name)) then
+      value = getenv_text(backend_specific_name)
+      if (allocated(value)) return
+    end if
 
-    command_line = getenv_text(variable_name)
-  end function test_command_override
+    value = getenv_text("FGOF_CLIPBOARD_TEST_" // variable_name)
+  end function test_env_value
+
+  function backend_override_variable_name(backend, variable_name) result(name)
+    character(len=*), intent(in) :: backend
+    character(len=*), intent(in) :: variable_name
+    character(len=:), allocatable :: name
+    character(len=:), allocatable :: suffix
+
+    suffix = backend_variable_suffix(backend)
+    if (.not. allocated(suffix)) return
+
+    name = "FGOF_CLIPBOARD_TEST_" // suffix // "_" // variable_name
+  end function backend_override_variable_name
+
+  function backend_variable_suffix(backend) result(suffix)
+    character(len=*), intent(in) :: backend
+    character(len=:), allocatable :: suffix
+
+    select case (backend)
+    case (BACKEND_PBCOPY)
+      suffix = "PBCOPY"
+    case (BACKEND_WL_CLIPBOARD)
+      suffix = "WL_CLIPBOARD"
+    case (BACKEND_XCLIP)
+      suffix = "XCLIP"
+    case (BACKEND_XSEL)
+      suffix = "XSEL"
+    end select
+  end function backend_variable_suffix
 
   logical function process_completed_successfully(process_outcome) result(ok)
     type(process_result), intent(in) :: process_outcome
@@ -356,6 +416,119 @@ contains
 
     message = "no supported clipboard backend is available"
   end function unavailable_message
+
+  logical function handle_test_clipboard_get(backend, result_value) result(handled)
+    character(len=*), intent(in) :: backend
+    type(clipboard_result), intent(inout) :: result_value
+    character(len=:), allocatable :: store_path
+    character(len=:), allocatable :: fail_path
+
+    handled = .false.
+    store_path = test_env_value(backend, "STORE")
+    if (.not. allocated(store_path)) return
+
+    handled = .true.
+    fail_path = test_env_value(backend, "FAIL_PASTE")
+    if (path_exists(fail_path)) then
+      result_value%success = .false.
+      result_value%error_code = FGOF_CLIPBOARD_ERR_IO
+      result_value%error_message = "clipboard read failed: mock clipboard paste failure"
+      return
+    end if
+
+    result_value%success = .true.
+    result_value%error_code = FGOF_CLIPBOARD_OK
+    result_value%text = read_text_file(store_path)
+    result_value%error_message = ""
+  end function handle_test_clipboard_get
+
+  logical function handle_test_clipboard_set(backend, text, result_value) result(handled)
+    character(len=*), intent(in) :: backend
+    character(len=*), intent(in) :: text
+    type(clipboard_result), intent(inout) :: result_value
+    character(len=:), allocatable :: store_path
+    character(len=:), allocatable :: fail_path
+
+    handled = .false.
+    store_path = test_env_value(backend, "STORE")
+    if (.not. allocated(store_path)) return
+
+    handled = .true.
+    fail_path = test_env_value(backend, "FAIL_COPY")
+    if (path_exists(fail_path)) then
+      result_value%success = .false.
+      result_value%error_code = FGOF_CLIPBOARD_ERR_IO
+      result_value%error_message = "clipboard write failed: mock clipboard copy failure"
+      return
+    end if
+
+    if (.not. write_text_file(store_path, text)) then
+      result_value%success = .false.
+      result_value%error_code = FGOF_CLIPBOARD_ERR_IO
+      result_value%error_message = "clipboard write failed: mock clipboard store error"
+      return
+    end if
+
+    result_value%success = .true.
+    result_value%error_code = FGOF_CLIPBOARD_OK
+    result_value%error_message = ""
+  end function handle_test_clipboard_set
+
+  logical function path_exists(path) result(exists)
+    character(len=:), allocatable, intent(in) :: path
+
+    exists = .false.
+    if (.not. allocated(path)) return
+    if (len(path) == 0) return
+    inquire(file=path, exist=exists)
+  end function path_exists
+
+  logical function write_text_file(path, text) result(ok)
+    character(len=*), intent(in) :: path
+    character(len=*), intent(in) :: text
+    integer :: unit
+    integer :: io
+
+    ok = .false.
+    open(newunit=unit, file=path, status="replace", access="stream", form="unformatted", action="write", iostat=io)
+    if (io /= 0) return
+
+    if (len(text) > 0) then
+      write(unit, iostat=io) text
+    else
+      io = 0
+    end if
+    close(unit, iostat=io)
+    if (io /= 0) return
+
+    ok = .true.
+  end function write_text_file
+
+  function read_text_file(path) result(text)
+    character(len=*), intent(in) :: path
+    character(len=:), allocatable :: text
+    integer :: unit
+    integer :: io
+    integer :: file_size
+
+    open(newunit=unit, file=path, status="old", access="stream", form="unformatted", action="read", iostat=io)
+    if (io /= 0) then
+      text = ""
+      return
+    end if
+
+    inquire(unit=unit, size=file_size)
+    if (file_size <= 0) then
+      text = ""
+      close(unit, iostat=io)
+      return
+    end if
+
+    allocate(character(len=file_size) :: text)
+    read(unit, iostat=io) text
+    if (io /= 0) text = ""
+    close(unit, iostat=io)
+  end function read_text_file
 
   function getenv_text(name) result(value)
     character(len=*), intent(in) :: name
