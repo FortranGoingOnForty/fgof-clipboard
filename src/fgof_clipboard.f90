@@ -46,14 +46,16 @@ contains
     type(clipboard_result) :: result_value
     type(process_options) :: options
     type(process_result) :: process_outcome
-    character(len=:), allocatable :: backend
+    character(len=len(BACKEND_WL_CLIPBOARD)), allocatable :: backends(:)
     character(len=:), allocatable :: command_line
+    integer :: i
+    logical :: saw_io_failure
 
     result_value = clear_clipboard_result()
-    backend = detected_backend()
-    result_value%backend = backend
+    backends = candidate_backends()
 
-    if (backend == BACKEND_UNAVAILABLE) then
+    if (size(backends) == 0) then
+      result_value%backend = BACKEND_UNAVAILABLE
       result_value%error_code = FGOF_CLIPBOARD_ERR_UNAVAILABLE
       result_value%error_message = unavailable_message()
       return
@@ -61,17 +63,30 @@ contains
 
     options%capture_stdout = .true.
     options%capture_stderr = .true.
-    command_line = paste_command_for_backend(backend)
-    process_outcome = run(shell(command_line), options)
-    if (.not. process_completed_successfully(process_outcome)) then
-      call set_process_error(result_value, FGOF_CLIPBOARD_ERR_IO, "clipboard read failed", process_outcome)
-      return
-    end if
+    saw_io_failure = .false.
+    do i = 1, size(backends)
+      result_value%backend = trim(backends(i))
+      command_line = paste_command_for_backend(result_value%backend)
+      process_outcome = run(shell(command_line), options)
+      if (process_completed_successfully(process_outcome)) then
+        result_value%success = .true.
+        result_value%error_code = FGOF_CLIPBOARD_OK
+        result_value%text = process_outcome%stdout
+        result_value%error_message = ""
+        return
+      end if
 
-    result_value%success = .true.
-    result_value%error_code = FGOF_CLIPBOARD_OK
-    result_value%text = process_outcome%stdout
-    result_value%error_message = ""
+      if (process_outcome%error_code == FGOF_PROCESS_OK) then
+        saw_io_failure = .true.
+        call set_process_error(result_value, FGOF_CLIPBOARD_ERR_IO, "clipboard read failed", process_outcome)
+      end if
+    end do
+
+    if (saw_io_failure) return
+
+    result_value%backend = BACKEND_UNAVAILABLE
+    result_value%error_code = FGOF_CLIPBOARD_ERR_UNAVAILABLE
+    result_value%error_message = unavailable_message()
   end function get_clipboard_text
 
   function set_clipboard_text(text) result(result_value)
@@ -79,15 +94,17 @@ contains
     type(clipboard_result) :: result_value
     type(process_options) :: options
     type(process_result) :: process_outcome
-    character(len=:), allocatable :: backend
+    character(len=len(BACKEND_WL_CLIPBOARD)), allocatable :: backends(:)
     character(len=:), allocatable :: command_line
+    integer :: i
+    logical :: saw_io_failure
 
     result_value = clear_clipboard_result()
-    backend = detected_backend()
-    result_value%backend = backend
     result_value%text = text
+    backends = candidate_backends()
 
-    if (backend == BACKEND_UNAVAILABLE) then
+    if (size(backends) == 0) then
+      result_value%backend = BACKEND_UNAVAILABLE
       result_value%error_code = FGOF_CLIPBOARD_ERR_UNAVAILABLE
       result_value%error_message = unavailable_message()
       return
@@ -95,22 +112,35 @@ contains
 
     options%stdin = text
     options%capture_stderr = .true.
-    command_line = copy_command_for_backend(backend)
-    process_outcome = run(shell(command_line), options)
-    if (.not. process_completed_successfully(process_outcome)) then
-      call set_process_error(result_value, FGOF_CLIPBOARD_ERR_IO, "clipboard write failed", process_outcome)
-      return
-    end if
+    saw_io_failure = .false.
+    do i = 1, size(backends)
+      result_value%backend = trim(backends(i))
+      command_line = copy_command_for_backend(result_value%backend)
+      process_outcome = run(shell(command_line), options)
+      if (process_completed_successfully(process_outcome)) then
+        result_value%success = .true.
+        result_value%error_code = FGOF_CLIPBOARD_OK
+        result_value%error_message = ""
+        return
+      end if
 
-    result_value%success = .true.
-    result_value%error_code = FGOF_CLIPBOARD_OK
-    result_value%error_message = ""
+      if (process_outcome%error_code == FGOF_PROCESS_OK) then
+        saw_io_failure = .true.
+        call set_process_error(result_value, FGOF_CLIPBOARD_ERR_IO, "clipboard write failed", process_outcome)
+      end if
+    end do
+
+    if (saw_io_failure) return
+
+    result_value%backend = BACKEND_UNAVAILABLE
+    result_value%error_code = FGOF_CLIPBOARD_ERR_UNAVAILABLE
+    result_value%error_message = unavailable_message()
   end function set_clipboard_text
 
   function clipboard_backend_name() result(name)
     character(len=:), allocatable :: name
 
-    name = detected_backend()
+    name = preferred_backend_name()
   end function clipboard_backend_name
 
   function clipboard_error_name(error_code) result(name)
@@ -133,39 +163,81 @@ contains
     end select
   end function clipboard_error_name
 
-  function detected_backend() result(name)
+  function preferred_backend_name() result(name)
     character(len=:), allocatable :: name
+    character(len=len(BACKEND_WL_CLIPBOARD)), allocatable :: backends(:)
+
+    backends = candidate_backends()
+    if (size(backends) == 0) then
+      name = BACKEND_UNAVAILABLE
+    else
+      name = trim(backends(1))
+    end if
+  end function preferred_backend_name
+
+  function candidate_backends() result(backends)
+    character(len=len(BACKEND_WL_CLIPBOARD)), allocatable :: backends(:)
     character(len=:), allocatable :: display
     character(len=:), allocatable :: wayland_display
+    character(len=:), allocatable :: xdg_session_type
+
+    allocate(backends(0))
 
     if (command_available("pbcopy") .and. command_available("pbpaste")) then
-      name = BACKEND_PBCOPY
-      return
+      call append_backend(backends, BACKEND_PBCOPY)
     end if
 
     wayland_display = getenv_text("WAYLAND_DISPLAY")
-    if (allocated(wayland_display)) then
+    xdg_session_type = getenv_text("XDG_SESSION_TYPE")
+    if (allocated(wayland_display) .or. text_equals(xdg_session_type, "wayland")) then
       if (command_available("wl-copy") .and. command_available("wl-paste")) then
-        name = BACKEND_WL_CLIPBOARD
-        return
+        call append_backend(backends, BACKEND_WL_CLIPBOARD)
       end if
     end if
 
     display = getenv_text("DISPLAY")
-    if (allocated(display)) then
-      if (command_available("xclip")) then
-        name = BACKEND_XCLIP
-        return
-      end if
-
-      if (command_available("xsel")) then
-        name = BACKEND_XSEL
-        return
-      end if
+    if (allocated(display) .or. text_equals(xdg_session_type, "x11")) then
+      if (command_available("xclip")) call append_backend(backends, BACKEND_XCLIP)
+      if (command_available("xsel")) call append_backend(backends, BACKEND_XSEL)
     end if
+  end function candidate_backends
 
-    name = BACKEND_UNAVAILABLE
-  end function detected_backend
+  subroutine append_backend(backends, backend)
+    character(len=len(BACKEND_WL_CLIPBOARD)), allocatable, intent(inout) :: backends(:)
+    character(len=*), intent(in) :: backend
+    character(len=len(BACKEND_WL_CLIPBOARD)), allocatable :: grown(:)
+    integer :: count
+
+    if (backend_already_listed(backends, backend)) return
+
+    count = size(backends)
+    allocate(grown(count + 1))
+    if (count > 0) grown(:count) = backends
+    grown(count + 1) = backend
+    call move_alloc(grown, backends)
+  end subroutine append_backend
+
+  logical function backend_already_listed(backends, backend) result(found)
+    character(len=len(BACKEND_WL_CLIPBOARD)), intent(in) :: backends(:)
+    character(len=*), intent(in) :: backend
+    integer :: i
+
+    found = .false.
+    do i = 1, size(backends)
+      if (trim(backends(i)) == backend) then
+        found = .true.
+        return
+      end if
+    end do
+  end function backend_already_listed
+
+  logical function text_equals(value, expected) result(matches)
+    character(len=:), allocatable, intent(in) :: value
+    character(len=*), intent(in) :: expected
+
+    matches = allocated(value)
+    if (matches) matches = value == expected
+  end function text_equals
 
   logical function command_available(command_name) result(found)
     character(len=*), intent(in) :: command_name
