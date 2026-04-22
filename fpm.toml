@@ -1,0 +1,20 @@
+name = "fgof-clipboard"
+version = "0.1.0"
+license = "MIT"
+author = "FortranGoingOnForty"
+maintainer = "FortranGoingOnForty"
+copyright = "2026"
+description = "Clipboard text helpers for modern Fortran"
+
+[build]
+auto-executables = false
+auto-tests = true
+auto-examples = false
+
+[install]
+library = true
+
+[fortran]
+implicit-typing = false
+implicit-external = false
+source-form = "free"
