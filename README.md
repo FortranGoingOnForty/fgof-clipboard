@@ -19,6 +19,20 @@ Tracked today:
 - scaffold `get_clipboard_text()` and `set_clipboard_text()` entry points
 - focused scaffold coverage in `fpm test`
 
+Current public procedures:
+
+- `clear_clipboard_result`
+- `get_clipboard_text`
+- `set_clipboard_text`
+- `clipboard_backend_name`
+- `clipboard_error_name`
+
+Current scaffold semantics:
+
+- the package builds and tests cleanly on macOS and Ubuntu
+- the current backend name is `scaffold`
+- clipboard get and set currently report `unavailable` until the first backend sprint lands
+
 ## Build And Test
 
 ```bash
