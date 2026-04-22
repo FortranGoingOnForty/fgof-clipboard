@@ -40,6 +40,11 @@ program test_scaffold
   if (result_value%text /= "hello") error stop "set_clipboard_text should preserve attempted text in result"
 
   if (backend == "unavailable") then
+    result_value = get_clipboard_text()
+    if (result_value%error_code /= FGOF_CLIPBOARD_ERR_UNAVAILABLE) error stop "get should report unavailable when no backend exists"
+    if (result_value%success) error stop "get should not report success when no backend exists"
+    if (result_value%text /= "") error stop "get should keep text empty when no backend exists"
+
     if (result_value%error_code /= FGOF_CLIPBOARD_ERR_UNAVAILABLE) error stop "set should report unavailable when no backend exists"
     if (result_value%success) error stop "set should not report success when no backend exists"
   end if
