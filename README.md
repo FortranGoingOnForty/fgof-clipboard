@@ -10,14 +10,21 @@ catalog, but it is intended to stand on its own as a normal `fpm` package.
 
 ## Status
 
-Initial scaffold is in place.
+Sprint 01 is in place.
 
 Tracked today:
 
 - stable clipboard result type
+- reported backend identity on clipboard operations
 - backend and error naming helpers
-- scaffold `get_clipboard_text()` and `set_clipboard_text()` entry points
-- focused scaffold coverage in `fpm test`
+- working `get_clipboard_text()` and `set_clipboard_text()` entry points
+- macOS `pbcopy` / `pbpaste` backend
+- Linux `wl-copy` / `wl-paste`, `xclip`, and `xsel` command backends
+- backend-aware roundtrip coverage in `fpm test`
+
+Current public types:
+
+- `clipboard_result`
 
 Current public procedures:
 
@@ -27,11 +34,13 @@ Current public procedures:
 - `clipboard_backend_name`
 - `clipboard_error_name`
 
-Current scaffold semantics:
+Current semantics:
 
 - the package builds and tests cleanly on macOS and Ubuntu
-- the current backend name is `scaffold`
-- clipboard get and set currently report `unavailable` until the first backend sprint lands
+- `clipboard_backend_name()` auto-detects `pbcopy`, `wl-clipboard`, `xclip`, `xsel`, or `unavailable`
+- `get_clipboard_text()` and `set_clipboard_text()` return the detected backend in `clipboard_result%backend`
+- when no supported backend is available, both operations report `unavailable`
+- text flows are command-backed today and focused on clipboard text, not arbitrary binary payloads
 
 ## Build And Test
 
