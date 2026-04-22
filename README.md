@@ -21,7 +21,7 @@ Tracked today:
 - macOS `pbcopy` / `pbpaste` backend
 - Linux `wl-copy` / `wl-paste`, `xclip`, and `xsel` command backends
 - backend fallback hardening for stale detection probes
-- mocked clipboard roundtrip, edge, and failure coverage in `fpm test`
+- self-configuring mocked clipboard roundtrip, edge, failure, and fallback coverage in `fpm test`
 
 Current public types:
 
@@ -45,7 +45,7 @@ Current semantics:
 - when no supported backend is available, both operations report `unavailable`
 - empty clipboard writes are treated as normal successful text operations when a backend exists
 - text flows are command-backed today and focused on clipboard text, not arbitrary binary payloads
-- CI uses an internal mock clipboard backend so test runs do not mutate the runner's real clipboard
+- the test suite configures its own internal mock clipboard backend, so local and CI runs do not mutate the host clipboard
 
 ## Build And Test
 
