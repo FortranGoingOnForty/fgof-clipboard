@@ -56,5 +56,21 @@ jobs:
           "$FC" --version
           "$CC" --version
 
+      - name: Set up mock clipboard backend
+        run: |
+          mock_dir="${RUNNER_TEMP}/fgof-clipboard-mock"
+          mkdir -p "${mock_dir}"
+          cp test/bin/mock-copy.sh "${mock_dir}/mock-copy.sh"
+          cp test/bin/mock-paste.sh "${mock_dir}/mock-paste.sh"
+          chmod +x "${mock_dir}/mock-copy.sh" "${mock_dir}/mock-paste.sh"
+          {
+            echo "FGOF_CLIPBOARD_TEST_BACKEND=pbcopy"
+            echo "FGOF_CLIPBOARD_TEST_COPY_CMD=${mock_dir}/mock-copy.sh"
+            echo "FGOF_CLIPBOARD_TEST_PASTE_CMD=${mock_dir}/mock-paste.sh"
+            echo "FGOF_CLIPBOARD_TEST_STORE=${mock_dir}/clipboard.txt"
+            echo "FGOF_CLIPBOARD_TEST_FAIL_COPY=${mock_dir}/fail-copy"
+            echo "FGOF_CLIPBOARD_TEST_FAIL_PASTE=${mock_dir}/fail-paste"
+          } >> "$GITHUB_ENV"
+
       - name: Run test suite
         run: fpm test --verbose
