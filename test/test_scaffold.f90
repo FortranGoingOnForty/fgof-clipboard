@@ -14,14 +14,17 @@ program test_scaffold
   implicit none
 
   type(clipboard_result) :: result_value
+  character(len=:), allocatable :: backend
 
   result_value = clear_clipboard_result()
   if (result_value%success) error stop "clipboard result should start unsuccessful"
   if (result_value%error_code /= FGOF_CLIPBOARD_OK) error stop "clipboard result should start ok"
+  if (result_value%backend /= "") error stop "clipboard result should start with empty backend"
   if (result_value%text /= "") error stop "clipboard result should start with empty text"
   if (result_value%error_message /= "") error stop "clipboard result should start with empty error_message"
 
-  if (clipboard_backend_name() /= "scaffold") error stop "backend helper should describe scaffold backend"
+  backend = clipboard_backend_name()
+  if (.not. is_known_backend(backend)) error stop "backend helper should report a known backend name"
   if (clipboard_error_name(FGOF_CLIPBOARD_OK) /= "ok") error stop "error helper should map ok"
   if (clipboard_error_name(FGOF_CLIPBOARD_ERR_INVALID_OPTIONS) /= "invalid-options") error stop "error helper should map invalid options"
   if (clipboard_error_name(FGOF_CLIPBOARD_ERR_UNAVAILABLE) /= "unavailable") error stop "error helper should map unavailable"
@@ -30,11 +33,26 @@ program test_scaffold
   if (clipboard_error_name(999) /= "unknown") error stop "error helper should map unknown codes"
 
   result_value = get_clipboard_text()
-  if (result_value%error_code /= FGOF_CLIPBOARD_ERR_UNAVAILABLE) error stop "scaffold get should report unavailable"
-  if (result_value%success) error stop "scaffold get should not report success"
+  if (result_value%backend /= backend) error stop "get_clipboard_text should report the detected backend"
 
   result_value = set_clipboard_text("hello")
-  if (result_value%error_code /= FGOF_CLIPBOARD_ERR_UNAVAILABLE) error stop "scaffold set should report unavailable"
-  if (result_value%text /= "hello") error stop "scaffold set should preserve attempted text in result"
-  if (result_value%success) error stop "scaffold set should not report success"
+  if (result_value%backend /= backend) error stop "set_clipboard_text should report the detected backend"
+  if (result_value%text /= "hello") error stop "set_clipboard_text should preserve attempted text in result"
+
+  if (backend == "unavailable") then
+    if (result_value%error_code /= FGOF_CLIPBOARD_ERR_UNAVAILABLE) error stop "set should report unavailable when no backend exists"
+    if (result_value%success) error stop "set should not report success when no backend exists"
+  end if
+
+contains
+
+  logical function is_known_backend(name) result(known)
+    character(len=*), intent(in) :: name
+
+    known = name == "pbcopy" .or. &
+            name == "wl-clipboard" .or. &
+            name == "xclip" .or. &
+            name == "xsel" .or. &
+            name == "unavailable"
+  end function is_known_backend
 end program test_scaffold
