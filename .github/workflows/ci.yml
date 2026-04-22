@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - trunk
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  FPM_VERSION: "0.13.0"
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Fortran toolchain
+        uses: fortran-lang/setup-fortran@v1
+        with:
+          compiler: gcc
+          version: latest
+
+      - name: Install fpm from official release
+        if: runner.os != 'macOS'
+        run: |
+          asset="fpm-${FPM_VERSION}-linux-x86_64-gcc-12"
+          curl -fsSLo "${asset}" "https://github.com/fortran-lang/fpm/releases/download/v${FPM_VERSION}/${asset}"
+          curl -fsSLo "${asset}.sha256" "https://github.com/fortran-lang/fpm/releases/download/v${FPM_VERSION}/${asset}.sha256"
+          shasum -a 256 -c "${asset}.sha256"
+          chmod +x "${asset}"
+          mv "${asset}" fpm
+          echo "${PWD}" >> "$GITHUB_PATH"
+
+      - name: Install fpm with Homebrew
+        if: runner.os == 'macOS'
+        run: |
+          brew tap fortran-lang/homebrew-fortran
+          brew install fpm
+
+      - name: Show tool versions
+        run: |
+          fpm --version
+          "$FC" --version
+          "$CC" --version
+
+      - name: Run test suite
+        run: fpm test --verbose
