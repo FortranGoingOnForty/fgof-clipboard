@@ -11,6 +11,7 @@ module fgof_clipboard_types
   type, public :: clipboard_result
     logical :: success = .false.
     integer :: error_code = FGOF_CLIPBOARD_OK
+    character(len=:), allocatable :: backend
     character(len=:), allocatable :: text
     character(len=:), allocatable :: error_message
   end type clipboard_result
